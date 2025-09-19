@@ -274,14 +274,16 @@ async def call_dify_data_tool(model: str, prompt: str, data_dict: Dict[str, List
         "Content-Type": "application/json"
     }
 
-    # 构建输入数据，将所有数据集传入 inputs
-    inputs = {}
+    # 方案1：将数据直接包含在 query 中
+    data_text = ""
     for key, value in data_dict.items():
-        inputs[key] = json.dumps(value, ensure_ascii=False)
+        data_text += f"\n{key}: {json.dumps(value, ensure_ascii=False, indent=2)}\n"
+    
+    full_prompt = f"{prompt}\n\n数据内容：{data_text}"
 
     data = {
-        "inputs": inputs,
-        "query": prompt,
+        "inputs": {},  # 清空 inputs
+        "query": full_prompt,  # 将数据包含在 query 中
         "response_mode": "blocking",
         "user": user_id,
         "conversation_id": conversation_id
@@ -307,7 +309,6 @@ async def call_dify_data_tool(model: str, prompt: str, data_dict: Dict[str, List
             if "answer" in result:
                 # 尝试解析返回的JSON结果
                 try:
-                    # 假设大模型返回的是JSON格式的字符串
                     answer_text = result["answer"]
                     # 尝试解析为JSON
                     if answer_text.strip().startswith('[') or answer_text.strip().startswith('{'):
