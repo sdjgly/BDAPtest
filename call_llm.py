@@ -18,7 +18,7 @@ import atexit
 import requests
 import traceback
 import json
-
+import re
 
 # 例子，后续需要将其中的模型名字进行规范
 class ModelName(str, Enum):
@@ -260,78 +260,100 @@ async def get_model(request: ChatRequest):
         conversation_id=new_conversation_id
     )
 
-def extract_json_from_answer(answer_text: str):
-    """从模型回答中提取JSON数据的改进版本"""
-    
-    # 方法1: 提取markdown代码块中的JSON
-    json_pattern = r'```json\s*\n(.*?)\n```'
-    matches = re.findall(json_pattern, answer_text, re.DOTALL)
-    
-    for match in matches:
-        try:
-            return json.loads(match.strip())
-        except json.JSONDecodeError:
-            continue
-    
-    # 方法2: 提取普通代码块中的JSON
-    code_pattern = r'```\s*\n(.*?)\n```'
-    matches = re.findall(code_pattern, answer_text, re.DOTALL)
-    
-    for match in matches:
-        try:
-            # 尝试解析为JSON
-            stripped = match.strip()
-            if stripped.startswith('[') or stripped.startswith('{'):
-                return json.loads(stripped)
-        except json.JSONDecodeError:
-            continue
-    
-    # 方法3: 查找独立的JSON结构
-    # 匹配数组格式 [...]
-    array_pattern = r'\[(.*?)\]'
-    matches = re.findall(array_pattern, answer_text, re.DOTALL)
-    
-    for match in matches:
-        try:
-            full_json = f'[{match}]'
-            return json.loads(full_json)
-        except json.JSONDecodeError:
-            continue
-    
-    # 方法4: 查找对象格式 {...}
-    object_pattern = r'\{(.*?)\}'
-    matches = re.findall(object_pattern, answer_text, re.DOTALL)
-    
-    for match in matches:
-        try:
-            full_json = f'{{{match}}}'
-            return json.loads(full_json)
-        except json.JSONDecodeError:
-            continue
-    
-    # 方法5: 按行查找，寻找可能的JSON行
-    lines = answer_text.split('\n')
-    json_lines = []
-    in_json = False
-    
-    for line in lines:
-        stripped_line = line.strip()
-        if stripped_line.startswith('[') or stripped_line.startswith('{'):
-            in_json = True
-            json_lines = [stripped_line]
-        elif in_json:
-            json_lines.append(stripped_line)
-            if stripped_line.endswith(']') or stripped_line.endswith('}'):
-                try:
-                    json_text = '\n'.join(json_lines)
-                    return json.loads(json_text)
-                except json.JSONDecodeError:
-                    in_json = False
-                    json_lines = []
-    
-    return None
-
 # 数据处理部分调用大模型
+import re
+
+def extract_json_from_text(text: str):
+    """从文本中提取JSON内容"""
+    try:
+        # 方法1: 查找被```json```包围的代码块
+        json_pattern = r'```json\s*(\[[\s\S]*?\]|\{[\s\S]*?\})\s*```'
+        matches = re.findall(json_pattern, text, re.MULTILINE | re.DOTALL)
+        if matches:
+            return json.loads(matches[0])
+        
+        # 方法2: 查找被```包围的代码块（不一定有json标记）
+        code_pattern = r'```\s*(\[[\s\S]*?\]|\{[\s\S]*?\})\s*```'
+        matches = re.findall(code_pattern, text, re.MULTILINE | re.DOTALL)
+        if matches:
+            return json.loads(matches[0])
+        
+        # 方法3: 直接查找JSON数组或对象
+        # 查找数组
+        array_pattern = r'\[(?:[^[\]]*|(?:\[(?:[^[\]]*|(?:\[[^\]]*\])*)*\]))*\]'
+        array_matches = re.findall(array_pattern, text)
+        for match in array_matches:
+            try:
+                parsed = json.loads(match)
+                # 验证是否是我们想要的数据结构
+                if isinstance(parsed, list) and len(parsed) > 0:
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+        
+        # 查找对象
+        object_pattern = r'\{(?:[^{}]*|(?:\{(?:[^{}]*|(?:\{[^}]*\})*)*\}))*\}'
+        object_matches = re.findall(object_pattern, text)
+        for match in object_matches:
+            try:
+                parsed = json.loads(match)
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+                
+        return None
+        
+    except Exception as e:
+        print(f"JSON提取失败: {e}")
+        return None
+
+def extract_json_from_text(text: str):
+    """从文本中提取JSON内容"""
+    try:
+        # 方法1: 查找被```json```包围的代码块
+        json_pattern = r'```json\s*(\[[\s\S]*?\]|\{[\s\S]*?\})\s*```'
+        matches = re.findall(json_pattern, text, re.MULTILINE | re.DOTALL)
+        if matches:
+            return json.loads(matches[0])
+        
+        # 方法2: 查找被```包围的代码块（不一定有json标记）
+        code_pattern = r'```\s*(\[[\s\S]*?\]|\{[\s\S]*?\})\s*```'
+        matches = re.findall(code_pattern, text, re.MULTILINE | re.DOTALL)
+        if matches:
+            return json.loads(matches[0])
+        
+        # 方法3: 直接查找JSON数组或对象
+        # 查找数组
+        array_pattern = r'\[(?:[^[\]]*|(?:\[(?:[^[\]]*|(?:\[[^\]]*\])*)*\]))*\]'
+        array_matches = re.findall(array_pattern, text)
+        for match in array_matches:
+            try:
+                parsed = json.loads(match)
+                # 验证是否是我们想要的数据结构
+                if isinstance(parsed, list) and len(parsed) > 0:
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+        
+        # 查找对象
+        object_pattern = r'\{(?:[^{}]*|(?:\{(?:[^{}]*|(?:\{[^}]*\})*)*\}))*\}'
+        object_matches = re.findall(object_pattern, text)
+        for match in object_matches:
+            try:
+                parsed = json.loads(match)
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+                
+        return None
+        
+    except Exception as e:
+        print(f"JSON提取失败: {e}")
+        return None
+
+
 async def call_dify_data_tool(model: str, prompt: str, data_dict: Dict[str, List[Dict]], 
                               user_id: Optional[str] = "defaultid", 
                               conversation_id: Optional[str] = None) -> Dict[str, Any]:
@@ -345,12 +367,21 @@ async def call_dify_data_tool(model: str, prompt: str, data_dict: Dict[str, List
         "Content-Type": "application/json"
     }
 
-    # 方案1：将数据直接包含在 query 中
+    # 优化提示词，要求模型返回规范的JSON格式
     data_text = ""
     for key, value in data_dict.items():
         data_text += f"\n{key}: {json.dumps(value, ensure_ascii=False, indent=2)}\n"
     
-    full_prompt = f"{prompt}\n\n数据内容：{data_text}"
+    full_prompt = f"""{prompt}
+
+数据内容：{data_text}
+
+请注意：
+1. 请直接返回处理后的JSON结果，不要包含其他解释文字
+2. 结果必须是有效的JSON数组格式
+3. 如果需要解释，请在JSON结果后面添加说明
+
+JSON结果："""
 
     data = {
         "inputs": {},  # 清空 inputs
@@ -359,6 +390,12 @@ async def call_dify_data_tool(model: str, prompt: str, data_dict: Dict[str, List
         "user": user_id,
         "conversation_id": conversation_id
     }
+    
+    # 添加调试信息
+    print("=== 调试信息 ===")
+    print("请求数据:", json.dumps(data, ensure_ascii=False, indent=2))
+    print("原始数据字典:", data_dict)
+    print("===============")
 
     timeout = httpx.Timeout(120.0, read=120.0, connect=10.0)
 
@@ -378,28 +415,29 @@ async def call_dify_data_tool(model: str, prompt: str, data_dict: Dict[str, List
                 raise HTTPException(status_code=502, detail=f"[响应格式错误]无法解析JSON:{e}\n原始响应:{resp.text}")
 
             if "answer" in result:
-                # 使用改进的JSON解析逻辑
-                answer_text = result["answer"]
-                
+                # 尝试解析返回的JSON结果
                 try:
-                    # 首先尝试提取JSON
-                    processed_data = extract_json_from_answer(answer_text)
+                    answer_text = result["answer"]
+                    processed_data = None
                     
+                    # 方法1: 尝试直接解析整个回答
+                    try:
+                        if answer_text.strip().startswith('[') or answer_text.strip().startswith('{'):
+                            processed_data = json.loads(answer_text.strip())
+                    except json.JSONDecodeError:
+                        pass
+                    
+                    # 方法2: 如果方法1失败，尝试从文本中提取JSON块
                     if processed_data is None:
-                        # 如果提取失败，记录详细信息用于调试
-                        print("=== JSON提取失败 ===")
-                        print("原始回答:", answer_text[:500] + "..." if len(answer_text) > 500 else answer_text)
-                        print("==================")
+                        processed_data = extract_json_from_text(answer_text)
                     
                     return {
                         "answer": answer_text,
                         "processed_data": processed_data
                     }
-                    
                 except Exception as e:
-                    print(f"JSON解析异常: {e}")
                     return {
-                        "answer": answer_text,
+                        "answer": result["answer"],
                         "processed_data": None
                     }
             elif "message" in result:
@@ -414,7 +452,6 @@ async def call_dify_data_tool(model: str, prompt: str, data_dict: Dict[str, List
     except Exception as e:
         tb = traceback.format_exc()
         raise HTTPException(status_code=500, detail=f"[未知错误] {repr(e)}\n{tb}")
-
 
 # 统一数据处理接口
 @app.post("/data-process/execute", response_model=NewDataProcessResponse)
