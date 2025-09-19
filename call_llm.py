@@ -260,6 +260,77 @@ async def get_model(request: ChatRequest):
         conversation_id=new_conversation_id
     )
 
+def extract_json_from_answer(answer_text: str):
+    """从模型回答中提取JSON数据的改进版本"""
+    
+    # 方法1: 提取markdown代码块中的JSON
+    json_pattern = r'```json\s*\n(.*?)\n```'
+    matches = re.findall(json_pattern, answer_text, re.DOTALL)
+    
+    for match in matches:
+        try:
+            return json.loads(match.strip())
+        except json.JSONDecodeError:
+            continue
+    
+    # 方法2: 提取普通代码块中的JSON
+    code_pattern = r'```\s*\n(.*?)\n```'
+    matches = re.findall(code_pattern, answer_text, re.DOTALL)
+    
+    for match in matches:
+        try:
+            # 尝试解析为JSON
+            stripped = match.strip()
+            if stripped.startswith('[') or stripped.startswith('{'):
+                return json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+    
+    # 方法3: 查找独立的JSON结构
+    # 匹配数组格式 [...]
+    array_pattern = r'\[(.*?)\]'
+    matches = re.findall(array_pattern, answer_text, re.DOTALL)
+    
+    for match in matches:
+        try:
+            full_json = f'[{match}]'
+            return json.loads(full_json)
+        except json.JSONDecodeError:
+            continue
+    
+    # 方法4: 查找对象格式 {...}
+    object_pattern = r'\{(.*?)\}'
+    matches = re.findall(object_pattern, answer_text, re.DOTALL)
+    
+    for match in matches:
+        try:
+            full_json = f'{{{match}}}'
+            return json.loads(full_json)
+        except json.JSONDecodeError:
+            continue
+    
+    # 方法5: 按行查找，寻找可能的JSON行
+    lines = answer_text.split('\n')
+    json_lines = []
+    in_json = False
+    
+    for line in lines:
+        stripped_line = line.strip()
+        if stripped_line.startswith('[') or stripped_line.startswith('{'):
+            in_json = True
+            json_lines = [stripped_line]
+        elif in_json:
+            json_lines.append(stripped_line)
+            if stripped_line.endswith(']') or stripped_line.endswith('}'):
+                try:
+                    json_text = '\n'.join(json_lines)
+                    return json.loads(json_text)
+                except json.JSONDecodeError:
+                    in_json = False
+                    json_lines = []
+    
+    return None
+
 # 数据处理部分调用大模型
 async def call_dify_data_tool(model: str, prompt: str, data_dict: Dict[str, List[Dict]], 
                               user_id: Optional[str] = "defaultid", 
@@ -307,23 +378,28 @@ async def call_dify_data_tool(model: str, prompt: str, data_dict: Dict[str, List
                 raise HTTPException(status_code=502, detail=f"[响应格式错误]无法解析JSON:{e}\n原始响应:{resp.text}")
 
             if "answer" in result:
-                # 尝试解析返回的JSON结果
+                # 使用改进的JSON解析逻辑
+                answer_text = result["answer"]
+                
                 try:
-                    answer_text = result["answer"]
-                    # 尝试解析为JSON
-                    if answer_text.strip().startswith('[') or answer_text.strip().startswith('{'):
-                        processed_data = json.loads(answer_text)
-                    else:
-                        # 如果不是JSON格式，可能需要从文本中提取
-                        processed_data = None
+                    # 首先尝试提取JSON
+                    processed_data = extract_json_from_answer(answer_text)
+                    
+                    if processed_data is None:
+                        # 如果提取失败，记录详细信息用于调试
+                        print("=== JSON提取失败 ===")
+                        print("原始回答:", answer_text[:500] + "..." if len(answer_text) > 500 else answer_text)
+                        print("==================")
                     
                     return {
                         "answer": answer_text,
                         "processed_data": processed_data
                     }
-                except json.JSONDecodeError:
+                    
+                except Exception as e:
+                    print(f"JSON解析异常: {e}")
                     return {
-                        "answer": result["answer"],
+                        "answer": answer_text,
                         "processed_data": None
                     }
             elif "message" in result:
