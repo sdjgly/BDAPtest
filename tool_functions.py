@@ -14,8 +14,11 @@ app = FastAPI()
 # 统一的参数模型
 class UnifiedToolParams(BaseModel):
     # file_paths: List[str]
-    # 将文件以JSON格式传入
-    file_content: List[str]
+    # 考虑将文件以JSON格式直接传入
+    # file_content: List[str]
+    # 考虑将文件以JSON格式传入并使用str结构
+    file_content1: str = None
+    file_content2: str = None
     # output_path: Optional[str] = None  # 改为可选
     # 使用字符串来存储动态参数，然后转换为字典
     params: Optional[str] = "{}"
@@ -60,30 +63,31 @@ class UnifiedToolParams(BaseModel):
         params_dict = self._parse_params()
         return params_dict.get(key, default)
 
-    def ensure_output_path(self, suffix: str = "_processed"):
-        """确保output_path存在，如果没有则自动生成"""
-        if not self.output_path:
-            base_name = os.path.splitext(self.file_path)[0]
-            self.output_path = f"{base_name}{suffix}.csv"
-
-        # 确保输出目录存在
-        output_dir = os.path.dirname(self.output_path)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir, exist_ok = True)
-
-        return self.output_path
+    # def ensure_output_path(self, suffix: str = "_processed"):
+    #     """确保output_path存在，如果没有则自动生成"""
+    #     if not self.output_path:
+    #         base_name = os.path.splitext(self.file_path)[0]
+    #         self.output_path = f"{base_name}{suffix}.csv"
+    #
+    #     # 确保输出目录存在
+    #     output_dir = os.path.dirname(self.output_path)
+    #     if output_dir and not os.path.exists(output_dir):
+    #         os.makedirs(output_dir, exist_ok = True)
+    #
+    #     return self.output_path
 
     def check_single_file(self):
-        if not self.file_content:
+        if not self.file_content1:
             raise ValueError("文件内容不得为空")
 
     def check_multi_files(self, max_files = 2):
-        if not self.file_content:
+        if not self.file_content1:
             raise ValueError("文件内容不得为空")
-        if len(self.file_content) < 2:
+        if not self.file_content2:
+        # if len(self.file_content) < 2:
             raise ValueError("需要至少两个文件内容")
-        if len(self.file_content) > max_files:
-            raise ValueError(f"文件过多，最多支持 {max_files} 个")
+        # if len(self.file_content) > max_files:
+        #     raise ValueError(f"文件过多，最多支持 {max_files} 个")
 
 
 # 添加服务启动和关闭事件
@@ -122,7 +126,7 @@ def drop_empty_rows(params: UnifiedToolParams) -> dict:
     try:
         # df = pd.read_csv(params.file_paths[0])
         params.check_single_file()
-        df = pd.DataFrame.from_records(json.loads(params.file_content[0]))
+        df = pd.DataFrame.from_records(json.loads(params.file_content1))
         cleaned_df = df.dropna()
 
         # 自动生成output_path
@@ -148,7 +152,7 @@ def fill_missing_with_mean(params: UnifiedToolParams) -> dict:
     try:
         # df = pd.read_csv(params.file_paths[0])
         params.check_single_file()
-        df = pd.DataFrame.from_records(json.loads(params.file_content[0]))
+        df = pd.DataFrame.from_records(json.loads(params.file_content1))
         df = df.fillna(df.mean(numeric_only = True))
 
         # 自动生成output_path
@@ -174,7 +178,7 @@ def fill_missing_with_median(params: UnifiedToolParams) -> dict:
     try:
         # df = pd.read_csv(params.file_paths[0])
         params.check_single_file()
-        df = pd.DataFrame.from_records(json.loads(params.file_content[0]))
+        df = pd.DataFrame.from_records(json.loads(params.file_content1))
         df = df.fillna(df.median(numeric_only = True))
 
         # 自动生成output_path
@@ -200,7 +204,7 @@ def fill_missing_with_constant(params: UnifiedToolParams) -> dict:
     try:
         # df = pd.read_csv(params.file_paths[0])
         params.check_single_file()
-        df = pd.DataFrame.from_records(json.loads(params.file_content[0]))
+        df = pd.DataFrame.from_records(json.loads(params.file_content1))
         constant_value = params.get_param('constant_value') or params.get_param('value')
         if constant_value is None:
             raise ValueError("需要提供constant_value或value参数")
@@ -230,7 +234,7 @@ def fill_missing_with_mode(params: UnifiedToolParams) -> dict:
     try:
         # df = pd.read_csv(params.file_paths[0])
         params.check_single_file()
-        df = pd.DataFrame.from_records(json.loads(params.file_content[0]))
+        df = pd.DataFrame.from_records(json.loads(params.file_content1))
         df = df.fillna(df.mode().iloc[0])
 
         # 自动生成output_path
@@ -256,7 +260,7 @@ def filter_by_column(params: UnifiedToolParams) -> dict:
     try:
         # df = pd.read_csv(params.file_paths[0])
         params.check_single_file()
-        df = pd.DataFrame.from_records(json.loads(params.file_content[0]))
+        df = pd.DataFrame.from_records(json.loads(params.file_content1))
         column = params.get_param('column')
         condition = params.get_param('condition')
         value = params.get_param('value')
@@ -302,7 +306,7 @@ def rename_column(params: UnifiedToolParams) -> dict:
     try:
         # df = pd.read_csv(params.file_paths[0])
         params.check_single_file()
-        df = pd.DataFrame.from_records(json.loads(params.file_content[0]))
+        df = pd.DataFrame.from_records(json.loads(params.file_content1))
         old_name = params.get_param('old_name')
         new_name = params.get_param('new_name')
 
@@ -336,7 +340,7 @@ def convert_column_type(params: UnifiedToolParams) -> dict:
     try:
         # df = pd.read_csv(params.file_paths[0])
         params.check_single_file()
-        df = pd.DataFrame.from_records(json.loads(params.file_content[0]))
+        df = pd.DataFrame.from_records(json.loads(params.file_content1))
         column = params.get_param('column')
         target_type = params.get_param('target_type')
 
@@ -379,7 +383,7 @@ def aggregate_column(params: UnifiedToolParams) -> dict:
     try:
         # df = pd.read_csv(params.file_paths[0])
         params.check_single_file()
-        df = pd.DataFrame.from_records(json.loads(params.file_content[0]))
+        df = pd.DataFrame.from_records(json.loads(params.file_content1))
         group_by = params.get_param('group_by')
         target_column = params.get_param('target_column')  # 不聚合的列
         agg_func = params.get_param('agg_func')  # 聚合的列
@@ -446,7 +450,7 @@ def sort_by_column(params: UnifiedToolParams) -> dict:
     try:
         # df = pd.read_csv(params.file_paths[0])
         params.check_single_file()
-        df = pd.DataFrame.from_records(json.loads(params.file_content[0]))
+        df = pd.DataFrame.from_records(json.loads(params.file_content1))
         column = params.get_param('column')
         ascending = params.get_param('ascending', True)
 
@@ -484,8 +488,8 @@ def join_tables(params: UnifiedToolParams) -> dict:
         # df1 = pd.read_csv(params.file_paths[0])
         # df2 = pd.read_csv(params.file_paths[1])
         params.check_multi_files()
-        df1 = pd.DataFrame.from_records(json.loads(params.file_content[0]))
-        df2 = pd.DataFrame.from_records(json.loads(params.file_content[1]))
+        df1 = pd.DataFrame.from_records(json.loads(params.file_content1))
+        df2 = pd.DataFrame.from_records(json.loads(params.file_content2))
         how = params.join_mode
 
         if how and how not in ["left", "right", "outer", "inner"]:
