@@ -239,8 +239,8 @@ async def get_model(request: ChatRequest):
     )
 
 # 数据处理专用的Dify调用函数
-async def call_dify_with_tools(model: str, prompt: str, data_dict: Dict[str, List[Dict]], 
-                               user_id: Optional[str] = "defaultid", 
+async def call_dify_with_tools(model: str, query: str, data_dict: Dict[str, List[Dict]], 
+                               user_id: str = "default_user", 
                                conversation_id: Optional[str] = None) -> Dict[str, Any]:
     """
     调用配置了工具函数的Dify应用
@@ -256,35 +256,36 @@ async def call_dify_with_tools(model: str, prompt: str, data_dict: Dict[str, Lis
         "Content-Type": "application/json"
     }
 
-    # 将数据转换为Dify工具函数期望的file_content格式
-    # file_content应该是List[str]，每个元素是JSON字符串
-    file_content = []
-    for key, value in data_dict.items():
-        # 将每个数据集转换为JSON字符串
+    # 将数据拆解为独立的file_content字段传给Dify
+    # Dify期望每个file_content都是独立的字符串字段
+    data_inputs = {}
+    
+    # 为每个数据集创建独立的file_content字段
+    for i, (key, value) in enumerate(data_dict.items()):
+        field_name = f"file_content{i + 1}"  # file_content1, file_content2, ...
         json_str = json.dumps(value, ensure_ascii=False)
-        file_content.append(json_str)
-
-    # 构建inputs，包含file_content和其他必要参数
-    data_inputs = {
-        "file_content": file_content,  # 这是Dify工具函数期望的格式
-        "user_prompt": prompt  # 用户的原始需求
-    }
+        data_inputs[field_name] = json_str
+    
+    # 添加用户查询
+    data_inputs["user_query"] = query
 
     data = {
         "inputs": data_inputs,
-        "query": prompt,  # 用户的处理需求描述
+        "query": query,  # 用户的处理需求描述
         "response_mode": "blocking",
-        "user": user_id,
+        "user": user_id,  # 现在有默认值，确保不为空
         "conversation_id": conversation_id
     }
 
     print("=== 调试信息 ===")
     print("发送到Dify的数据:")
-    print(f"- file_content包含 {len(file_content)} 个数据集")
-    for i, content in enumerate(file_content):
-        data_length = len(json.loads(content)) if content else 0
-        print(f"  - 数据集 {i}: {data_length} 条记录")
-    print("- query:", prompt)
+    print(f"- 数据集字段: {list(data_inputs.keys())}")
+    for i, (key, value) in enumerate(data_dict.items()):
+        data_length = len(value) if isinstance(value, list) else 0
+        field_name = f"file_content{i + 1}"
+        print(f"  - {field_name} ({key}): {data_length} 条记录")
+    print("- query:", query)
+    print("- user:", user_id)
     print("===============")
 
     timeout = httpx.Timeout(120.0, read=120.0, connect=10.0)
@@ -332,8 +333,8 @@ async def execute_data_process(request: Dict[str, Any]) -> DataProcessResponse:
     请求格式:
     {
         "model": "model_name",
-        "user_prompt": "用户需求描述",
-        "user_id": "用户ID",
+        "query": "用户需求描述",  // 改为query
+        "user_id": "用户ID",  // 可选，有默认值
         "data0": [{"col1": "value1", "col2": "value2"}, ...],  # 第一个数据集
         "data1": [{"col1": "value1", "col2": "value2"}, ...],  # 第二个数据集（可选）
         ...
@@ -342,13 +343,13 @@ async def execute_data_process(request: Dict[str, Any]) -> DataProcessResponse:
     try:
         # 提取基本参数
         model = request.get("model")
-        user_prompt = request.get("user_prompt")
-        user_id = request.get("user_id", "defaultid")
+        query = request.get("query")  # 改为query
+        user_id = request.get("user_id", "default_user")  # 设置默认值
         
-        if not model or not user_prompt:
+        if not model or not query:
             return DataProcessResponse(
                 status="error",
-                error_details="缺少必要参数: model 和 user_prompt"
+                error_details="缺少必要参数: model 和 query"  # 改为query
             )
 
         # 提取数据字段 (data0, data1, data2, ...)
@@ -375,9 +376,9 @@ async def execute_data_process(request: Dict[str, Any]) -> DataProcessResponse:
         # 调用Dify，让大模型决策并调用工具函数
         result = await call_dify_with_tools(
             model=model,
-            prompt=user_prompt,
+            query=query,  # 改为query
             data_dict=data_dict,
-            user_id=user_id
+            user_id=user_id  # 现在有默认值
         )
 
         # Dify的工具函数会自动处理数据并返回结果
