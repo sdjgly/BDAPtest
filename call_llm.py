@@ -256,107 +256,71 @@ async def call_dify_with_tools(model: str, prompt: str, data_dict: Dict[str, Lis
         "Content-Type": "application/json"
     }
 
-    # 将JSON数据保存为临时文件并上传
-    files_data = []
-    temp_file_urls = []
-    
+    # 将数据转换为Dify工具函数期望的file_content格式
+    # file_content应该是List[str]，每个元素是JSON字符串
+    file_content = []
+    for key, value in data_dict.items():
+        # 将每个数据集转换为JSON字符串
+        json_str = json.dumps(value, ensure_ascii=False)
+        file_content.append(json_str)
+
+    # 构建inputs，包含file_content和其他必要参数
+    data_inputs = {
+        "file_content": file_content,  # 这是Dify工具函数期望的格式
+        "user_prompt": prompt  # 用户的原始需求
+    }
+
+    data = {
+        "inputs": data_inputs,
+        "query": prompt,  # 用户的处理需求描述
+        "response_mode": "blocking",
+        "user": user_id,
+        "conversation_id": conversation_id
+    }
+
+    print("=== 调试信息 ===")
+    print("发送到Dify的数据:")
+    print(f"- file_content包含 {len(file_content)} 个数据集")
+    for i, content in enumerate(file_content):
+        data_length = len(json.loads(content)) if content else 0
+        print(f"  - 数据集 {i}: {data_length} 条记录")
+    print("- query:", prompt)
+    print("===============")
+
+    timeout = httpx.Timeout(120.0, read=120.0, connect=10.0)
+
     try:
-        # 创建主数据文件 - 包含所有数据集的信息
-        short_uuid = str(uuid.uuid4())[:8]
-        main_data_filename = f"{short_uuid}_all_data.json"
-        main_data_path = os.path.join(SHARED_DIR, main_data_filename)
-        
-        # 将所有数据集合并到一个文件中，便于大模型理解完整的数据结构
-        combined_data = {
-            "datasets": data_dict,
-            "dataset_count": len(data_dict),
-            "dataset_names": list(data_dict.keys())
-        }
-        
-        with open(main_data_path, 'w', encoding='utf-8') as f:
-            json.dump(combined_data, f, ensure_ascii=False, indent=2)
-        
-        main_data_url = f"http://10.92.64.224:8003/local_files/{main_data_filename}"
-        temp_file_urls.append(main_data_path)
-        
-        files_data.append({
-            "type": "document", 
-            "transfer_method": "remote_url",
-            "url": main_data_url,
-            "upload_file_id": "combined_datasets"
-        })
-        
-        # 同时在inputs中提供数据，供工具函数直接使用
-        data_inputs = {}
-        
-        # 为单数据集操作提供第一个数据集
-        if len(data_dict) >= 1:
-            first_key = list(data_dict.keys())[0]
-            data_inputs["file_content"] = json.dumps([data_dict[first_key]], ensure_ascii=False)
-        
-        # 为多数据集操作（如join）提供所有数据集
-        if len(data_dict) >= 2:
-            all_datasets = list(data_dict.values())
-            data_inputs["file_content"] = json.dumps(all_datasets, ensure_ascii=False)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            resp = await client.post(dify_url, headers=headers, json=data)
 
-        data = {
-            "inputs": data_inputs,  # 提供数据给工具函数使用
-            "query": prompt,
-            "files": files_data,  # 提供给大模型理解数据结构
-            "response_mode": "blocking",
-            "user": user_id,
-            "conversation_id": conversation_id
-        }
+            print("状态码:", resp.status_code)
+            print("原始内容:", resp.text)
 
-        print("=== 调试信息 ===")
-        print("发送到Dify的数据:", json.dumps(data, ensure_ascii=False, indent=2))
-        print("临时文件列表:", temp_file_urls)
-        print("===============")
+            if resp.status_code == 504:
+                raise HTTPException(status_code=504, detail="[Dify错误]模型响应超时，稍后再试")
 
-        timeout = httpx.Timeout(120.0, read=120.0, connect=10.0)
-
-        try:
-            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-                resp = await client.post(dify_url, headers=headers, json=data)
-
-                print("状态码:", resp.status_code)
-                print("原始内容:", resp.text)
-
-                if resp.status_code == 504:
-                    raise HTTPException(status_code=504, detail="[Dify错误]模型响应超时，稍后再试")
-
-                try:
-                    result = resp.json()
-                except Exception as e:
-                    raise HTTPException(status_code=502, detail=f"[响应格式错误]无法解析JSON:{e}\n原始响应:{resp.text}")
-
-                if "answer" in result:
-                    return {
-                        "answer": result["answer"],
-                        "conversation_id": result.get("conversation_id")
-                    }
-                elif "message" in result:
-                    raise HTTPException(status_code=502, detail=f"[Dify错误] {result['message']}")
-                else:
-                    raise HTTPException(status_code=502, detail="[Dify响应格式异常]")
-
-        except httpx.ReadTimeout:
-            raise HTTPException(status_code=504, detail="[超时] Dify 响应超时")
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"[请求失败] {e}")
-        except Exception as e:
-            tb = traceback.format_exc()
-            raise HTTPException(status_code=500, detail=f"[未知错误] {repr(e)}\n{tb}")
-    
-    finally:
-        # 清理临时文件
-        for temp_file_path in temp_file_urls:
             try:
-                if os.path.exists(temp_file_path):
-                    os.remove(temp_file_path)
-                    print(f"🗑️ 已删除临时文件: {temp_file_path}")
+                result = resp.json()
             except Exception as e:
-                print(f"⚠️ 删除临时文件失败 {temp_file_path}: {e}")
+                raise HTTPException(status_code=502, detail=f"[响应格式错误]无法解析JSON:{e}\n原始响应:{resp.text}")
+
+            if "answer" in result:
+                return {
+                    "answer": result["answer"],
+                    "conversation_id": result.get("conversation_id")
+                }
+            elif "message" in result:
+                raise HTTPException(status_code=502, detail=f"[Dify错误] {result['message']}")
+            else:
+                raise HTTPException(status_code=502, detail="[Dify响应格式异常]")
+
+    except httpx.ReadTimeout:
+        raise HTTPException(status_code=504, detail="[超时] Dify 响应超时")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"[请求失败] {e}")
+    except Exception as e:
+        tb = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=f"[未知错误] {repr(e)}\n{tb}")
 
 # 统一的数据处理接口
 @app.post("/data-process/execute", response_model=DataProcessResponse)
@@ -364,6 +328,16 @@ async def execute_data_process(request: Dict[str, Any]) -> DataProcessResponse:
     """
     统一的数据处理接口
     大模型会在Dify中自动选择合适的工具函数处理数据
+    
+    请求格式:
+    {
+        "model": "model_name",
+        "user_prompt": "用户需求描述",
+        "user_id": "用户ID",
+        "data0": [{"col1": "value1", "col2": "value2"}, ...],  # 第一个数据集
+        "data1": [{"col1": "value1", "col2": "value2"}, ...],  # 第二个数据集（可选）
+        ...
+    }
     """
     try:
         # 提取基本参数
@@ -377,10 +351,15 @@ async def execute_data_process(request: Dict[str, Any]) -> DataProcessResponse:
                 error_details="缺少必要参数: model 和 user_prompt"
             )
 
-        # 提取数据字段
+        # 提取数据字段 (data0, data1, data2, ...)
         data_dict = {}
         for key, value in request.items():
             if key.startswith('data') and key[4:].isdigit():
+                if not isinstance(value, list):
+                    return DataProcessResponse(
+                        status="error",
+                        error_details=f"数据字段 {key} 必须是列表格式"
+                    )
                 data_dict[key] = value
 
         if not data_dict:
@@ -391,7 +370,7 @@ async def execute_data_process(request: Dict[str, Any]) -> DataProcessResponse:
 
         print(f"接收到数据处理请求: {len(data_dict)} 个数据集")
         for key, value in data_dict.items():
-            print(f"- {key}: {len(value) if isinstance(value, list) else 'unknown'} 条记录")
+            print(f"- {key}: {len(value)} 条记录")
 
         # 调用Dify，让大模型决策并调用工具函数
         result = await call_dify_with_tools(
@@ -401,14 +380,13 @@ async def execute_data_process(request: Dict[str, Any]) -> DataProcessResponse:
             user_id=user_id
         )
 
-        # 注意：实际的处理结果会通过工具函数返回
-        # 这里需要从Dify的回答中解析出处理后的数据
-        # 具体解析逻辑需要根据Dify工具函数的返回格式来定制
-        
+        # Dify的工具函数会自动处理数据并返回结果
+        # 大模型会根据工具函数的返回结果生成最终回答
         return DataProcessResponse(
             status="success",
             answer=result.get("answer"),
-            # result字段需要根据实际工具函数返回格式来解析
+            # 注意: 实际的处理结果数据需要从answer中解析
+            # 或者根据具体的Dify工具函数返回格式来调整
         )
 
     except Exception as e:
